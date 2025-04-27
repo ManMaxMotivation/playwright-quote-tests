@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,6 +29,7 @@ public class QuoteFormTest {
     private Browser browser;
     private Page page;
     private static final String CSV_FILE_PATH = "reports/test_results.csv";
+    private static final String REPORTS_DIR = "reports";
     private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @BeforeEach
@@ -43,6 +45,19 @@ public class QuoteFormTest {
         page.waitForSelector("#name", new Page.WaitForSelectorOptions()
                 .setState(WaitForSelectorState.VISIBLE)
                 .setTimeout(60000));
+
+        // Сохранение скриншота setup_screenshot.png
+        try {
+            Path reportsDir = Paths.get(REPORTS_DIR);
+            if (!Files.exists(reportsDir)) {
+                Files.createDirectory(reportsDir);
+            }
+            page.screenshot(new Page.ScreenshotOptions()
+                    .setPath(Paths.get(REPORTS_DIR, "setup_screenshot.png"))
+                    .setFullPage(true));
+        } catch (IOException e) {
+            System.err.println("Ошибка при сохранении setup_screenshot.png: " + e.getMessage());
+        }
     }
 
     @AfterEach
@@ -54,7 +69,26 @@ public class QuoteFormTest {
     @Test
     void happyPathSuccessfulFormSubmission() {
         boolean testPassed = false;
+        AtomicBoolean hasFormResponse = new AtomicBoolean(false);
         try {
+            // Устанавливаем слушатели для запросов и ответов
+            page.onRequest(request -> {
+                if (request.url().contains("/api/subscribe")) {
+                    System.out.println("Запрос формы отправлен: " + request.url() + " [" + request.method() + "]");
+                }
+            });
+            page.onResponse(response -> {
+                if (response.url().contains("/api/subscribe")) {
+                    System.out.println("Статус HTTP-кода: " + response.status());
+                    try {
+                        System.out.println("Ответ сервера: " + response.text());
+                    } catch (PlaywrightException e) {
+                        System.out.println("Ошибка при получении тела ответа: " + e.getMessage());
+                    }
+                    hasFormResponse.set(true);
+                }
+            });
+
             // Собираем данные формы
             List<String> testData = new ArrayList<>();
             String name = "John Doe";
@@ -98,15 +132,39 @@ public class QuoteFormTest {
 
             testPassed = true;
         } finally {
+            // Диагностика отсутствия ответа формы
+            if (!hasFormResponse.get()) {
+                System.out.println("Ответ формы не получен (возможно, из-за CORS или неверного URL)");
+            }
             // Логирование результата теста
             System.out.println("Test 'happyPathSuccessfulFormSubmission' " + (testPassed ? "PASSED" : "FAILED"));
+            System.out.flush();
         }
     }
 
     @Test
     void negativeCaseInvalidEmailAndEmptyField() {
         boolean testPassed = false;
+        AtomicBoolean hasFormResponse = new AtomicBoolean(false);
         try {
+            // Устанавливаем слушатели для запросов и ответов
+            page.onRequest(request -> {
+                if (request.url().contains("/api/subscribe")) {
+                    System.out.println("Запрос формы отправлен: " + request.url() + " [" + request.method() + "]");
+                }
+            });
+            page.onResponse(response -> {
+                if (response.url().contains("/api/subscribe")) {
+                    System.out.println("Статус HTTP-кода: " + response.status());
+                    try {
+                        System.out.println("Ответ сервера: " + response.text());
+                    } catch (PlaywrightException e) {
+                        System.out.println("Ошибка при получении тела ответа: " + e.getMessage());
+                    }
+                    hasFormResponse.set(true);
+                }
+            });
+
             page.fill("#name", "John Doe");
             page.fill("#email", "invalid_email");
             page.selectOption("#service", new SelectOption().setLabel("Select B Service"));
@@ -118,9 +176,23 @@ public class QuoteFormTest {
                 try {
                     page.waitForSelector("#email.is-invalid", new Page.WaitForSelectorOptions().setTimeout(5000));
                 } catch (TimeoutError e) {
-                    System.out.println("Validation did not set error class in time");
+                    System.out.println("Валидация не установила класс ошибки вовремя: " + e.getMessage());
                 }
             }
+
+            // Сохранение скриншота error_screenshot.png
+            try {
+                Path reportsDir = Paths.get(REPORTS_DIR);
+                if (!Files.exists(reportsDir)) {
+                    Files.createDirectory(reportsDir);
+                }
+                page.screenshot(new Page.ScreenshotOptions()
+                        .setPath(Paths.get(REPORTS_DIR, "error_screenshot.png"))
+                        .setFullPage(true));
+            } catch (IOException e) {
+                System.err.println("Ошибка при сохранении error_screenshot.png: " + e.getMessage());
+            }
+
             Locator emailField = page.locator("#email");
             assertTrue(emailField.getAttribute("class").contains("is-invalid"), "Email field should have error class");
             Locator formStatus = page.locator("#formStatus");
@@ -128,15 +200,20 @@ public class QuoteFormTest {
 
             testPassed = true;
         } finally {
+            // Диагностика отсутствия ответа формы
+            if (!hasFormResponse.get()) {
+                System.out.println("Ответ формы не получен (возможно, из-за CORS, клиентской валидации или неверного URL)");
+            }
             // Логирование результата теста
             System.out.println("Test 'negativeCaseInvalidEmailAndEmptyField' " + (testPassed ? "PASSED" : "FAILED"));
+            System.out.flush();
         }
     }
 
     private void writeToCsv(List<String> testData) {
         try {
             // Создаём директорию, если она не существует
-            Path reportsDir = Paths.get("reports");
+            Path reportsDir = Paths.get(REPORTS_DIR);
             if (!Files.exists(reportsDir)) {
                 Files.createDirectory(reportsDir);
             }
@@ -150,9 +227,9 @@ public class QuoteFormTest {
                 }
 
                 // Формируем строку CSV
-                String csvLine = String.join(",", testData.stream()
+                String csvLine = testData.stream()
                         .map(this::escapeCsv)
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.joining(","));
                 writer.write(csvLine);
                 writer.newLine();
             }
